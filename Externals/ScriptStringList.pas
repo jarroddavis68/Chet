@@ -74,12 +74,14 @@ type
     destructor Destroy; override;
     function GetLineIndex(aOccurence: Cardinal; const aLine: string): Integer;
     function ReplaceLine(aOccurence: Cardinal; const aOldLine: string; const aNewLine: string; aOffset: Integer): Boolean;
+    function ReplaceAllText(const AOldText: string; const ANewText: string; aOffset: Integer; const AReplaceAll: Boolean; const AIngoreCase: Boolean): Boolean;
     function RemoveLines(aOccurence: Cardinal; const aReferenceLine: string; aOffset: Integer; aCount: Cardinal): Boolean;
     function RemoveLineRange(aOccurence: Cardinal; const aStartLine: string; const aEndLine: string): Boolean;
     function RemoveLineRangeAll(const aStartLine: string; const aEndLine: string): Boolean;
     function InsertLine(aOccurence: Cardinal; const aReferenceLine: string; aOffset: Integer; const aNewLine: string): Boolean;
     function InsertTextFile(aOccurence: Cardinal; const aReferenceLine: string; aOffset: Integer; const aTextFilename: string): Boolean;
     function RemoveAllLines(const aStartText: string; aCount: Integer): Boolean;
+    function RemoveAllLinesThatHas(const aText: string; aCount: Integer): Boolean;
     function RegEx(const aPattern: string; const aValue: string; const aOperation: string): Boolean;
     function SaveToFileEx(const aFilename: string): Boolean;
     function LoadFromFileEx(const aFilename: string): Boolean;
@@ -193,6 +195,11 @@ begin
   Result := True;
 end;
 
+function TScriptStringList.ReplaceAllText(const AOldText: string; const ANewText: string; aOffset: Integer; const AReplaceAll: Boolean; const AIngoreCase: Boolean): Boolean;
+begin
+  Result := False;
+end;
+
 function TScriptStringList.RemoveLines(aOccurence: Cardinal; const aReferenceLine: string; aOffset: Integer; aCount: Cardinal): Boolean;
 var
   LIndex: Integer;
@@ -299,6 +306,27 @@ begin
   Result := True;
 end;
 
+function TScriptStringList.RemoveAllLinesThatHas(const aText: string; aCount: Integer): Boolean;
+var
+  LIndex: Integer;
+  LText: string;
+  LCount: Integer;
+begin
+  Result := False;
+  if aText.IsEmpty then Exit;
+
+  for LIndex := Self.Count-1 downto 0 do
+  begin
+    LText := Self[LIndex].Trim;
+    if LText.Contains(aText) then
+    begin
+      for LCount := 0 to aCount-1 do
+        Self.Delete(LIndex);
+    end;
+  end;
+
+  Result := True;
+end;
 
 function TScriptStringList.RegEx(const aPattern: string; const aValue: string; const aOperation: string): Boolean;
 var
@@ -365,15 +393,10 @@ var
   LIndex: Integer;
   LIndexStart: Integer;
   LImportList: TStringList;
+  LRoutineList: TStringList;
 
-  (*
-  procedure InsertLine(const aLine: string);
-  begin
-    Self.InsertLine(1, 'implementation', 1, aLine);
-  end;
-  *)
 
-  procedure InsertLine(const aLine: string);
+  procedure InsLine(const aLine: string); overload;
   begin
     Self.Insert(LIndexStart+1, aLine);
   end;
@@ -385,6 +408,7 @@ begin
   if LIndexStart = -1 then Exit;
 
   LImportList := TStringList.Create(dupIgnore, True, False);
+  LRoutineList := TStringList.Create;
 
   for LIndex := 0 to Self.Count-1 do
   begin
@@ -394,10 +418,10 @@ begin
         LLine := LLine.Replace('procedure ', '').Trim;
         LLine := LLine.Replace('(', ': procedure(');
         LLine := '  ' + LLine;
-        Self[LIndex] := LLine;
+        Self[LIndex] := '{REMOVELINE}';
         LName := LLine.Substring(0, LLine.IndexOf(':')).Trim;
-        //WriteLn(LName);
         LImportList.Add(LName);
+        LRoutineList.Add(LLine);
       end
     else
     if LLine.StartsWith('function ', True) then
@@ -405,16 +429,31 @@ begin
         LLine := LLine.Replace('function ', '').Trim;
         LLine := LLine.Replace('(', ': function(');
         LLine := '  ' + LLine;
-        Self[LIndex] := LLine;
+        Self[LIndex] := '{REMOVELINE}';
         LName := LLine.Substring(0, LLine.IndexOf(':')).Trim;
-        //WriteLn(LName);
         LImportList.Add(LName);
+        LRoutineList.Add(LLine);
       end
   end;
 
+  RemoveAllLines('{REMOVELINE}', 1);
+  RemoveAllLines('external ', 2);
 
-  InsertLine('end;');
-  InsertLIne('{$ENDREGION}');
+  LIndexStart := Self.GetLineIndex(1, 'implementation');
+  if LIndexStart = -1 then Exit;
+
+  for LIndex := LRoutineList.Count-1 downto 0 do
+  begin
+    Self.Insert(LIndexStart, LRoutineList[LIndex]);
+  end;
+
+  if LRoutineList.Count > 0 then
+    Self.Insert(LIndexStart, 'var');
+
+  LIndexStart := Self.GetLineIndex(1, 'implementation');
+  if LIndexStart = -1 then Exit;
+
+  InsLine('end;');
   for LIndex := LImportList.Count-1 downto 0 do
   begin
     LName := LImportList[LIndex];
@@ -425,41 +464,50 @@ begin
     else
     if atype = 1 then
       LLine := Format('  %s := MemoryGetProcAddress(aDLLHandle, ''%s'');', [LImportList[LIndex], LName]);
-    InsertLine(LLine);
+    InsLine(LLine);
   end;
   if aType = 0 then
-    InsertLine('  if aDllHandle = 0 then Exit;')
+    InsLine('  if aDllHandle = 0 then Exit;')
   else
   if aType = 1 then
-    InsertLine('  if not Assigned(aDllHandle) then Exit;');
+    InsLine('  if not Assigned(aDllHandle) then Exit;');
 
-  InsertLIne('{$REGION ''Exports''}');
-  InsertLine('begin');
+  InsLine('begin');
   if aType = 0 then
-    InsertLine('procedure GetExports(const aDLLHandle: THandle);')
+    InsLine('procedure GetExports(const aDLLHandle: THandle);')
   else
   if aType = 1 then
-    InsertLine('procedure GetExports(const aDLLHandle: Pointer);');
-  InsertLine('');
+    InsLine('procedure GetExports(const aDLLHandle: Pointer);');
+  InsLine('');
+
   if aType = 0 then
     begin
-      InsertLine('  WinApi.Windows;');
-      InsertLine('  System.Classes,');
+      InsertLine(1, 'interface', 1, '  WinApi.Windows;');
+      InsertLine(1, 'interface', 1, '  System.Classes,');
+      InsertLine(1, 'interface', 1, '  System.SysUtils,');
     end
   else
   if aType = 1 then
     begin
-      InsertLine('  MemoryModule;');
-      InsertLine('  WinApi.Windows,');
-      InsertLine('  System.Classes,');
+      InsertLine(1, 'interface', 1, '  MemoryModule;');
+      InsertLine(1, 'interface', 1, '  WinApi.Windows,');
+      InsertLine(1, 'interface', 1, '  System.Classes,');
+      InsertLine(1, 'interface', 1, '  System.SysUtils,');
     end;
-  InsertLine('uses');
-  InsertLine('');
 
+  InsertLine(1, 'interface', 1, 'uses');
+  InsertLine(1, 'interface', 1, '');
+
+  FreeAndNil(LRoutineList);
   FreeAndNil(LImportList);
 
-  RemoveAllLines('external', 2);
+  RemoveAllLines('external ', 2);
 
+  InsertLine(1, 'implementation', 0, '');
+  InsertLine(1, 'implementation', 0, 'procedure GetExports(const aDLLHandle: THandle);');
+  InsertLine(1, 'implementation', 0, '');
+
+  RemoveLines(1, 'const', 0, 8);
 end;
 
 function TScriptStringList.Evaluate(const aScript: string): Boolean;
@@ -472,6 +520,8 @@ var
   LText3: string;
   LOffset: Integer;
   LCount: Cardinal;
+  LBool1: Boolean;
+  LBool2: Boolean;
 
   function RemoveDoubleQuotes(const aString: string): string;
   begin
@@ -493,6 +543,19 @@ begin
       LText2 := RemoveDoubleQuotes(LParams[2]);
       LOffset := LParams[3].ToInteger;
       Result := Self.ReplaceLine(LOccurence, LText1, LText2, LOffset);
+    end
+  else
+  // ReplaceAllText(const AOldText: string; const ANewText: string; aOffset: Integer; const AReplaceAll: Boolean; const AIngoreCase: Boolean): Boolean;
+  // ReplaceAllText("(Sint8)", "", 0)
+  if GetScriptParams(LScript, 'ReplaceAllText', 5, LParams) then
+    begin
+      //
+      LText1 := RemoveDoubleQuotes(LParams[0]).Trim;
+      LText2 := RemoveDoubleQuotes(LParams[1]);
+      LOffset := LParams[2].ToInteger;
+      LBool1 := LParams[3].ToBoolean;
+      LBool2 := LParams[4].ToBoolean;
+      Result := Self.ReplaceAllText(LText1, LText2, LOffset, LBool1, LBool2);
     end
   else
   // RemoveLines(aOccurence: Cardinal; const aReferenceLine: string; aOffset: Integer; aCount: Cardinal)
@@ -537,7 +600,15 @@ begin
       Result := Self.RemoveAllLines(LText1, LCount);
     end
   else
-  //RemoveLineRangeAll(const aStartLine: string; const aEndLine: string): Boolean;
+  //RemoveAllLinesThasHas(const aText: string; aCount: Integer): Boolean
+  //RemoveAllLinesThatHs("_text_", 1)
+  if GetScriptParams(LScript, 'RemoveAllLinesThatHas', 2, LParams) then
+    begin
+      LText1 := RemoveDoubleQuotes(LParams[0]).Trim;
+      LCount := LParams[1].ToInteger;
+      Result := Self.RemoveAllLinesThatHas(LText1, LCount);
+    end
+  else  //RemoveLineRangeAll(const aStartLine: string; const aEndLine: string): Boolean;
   //RemoveLineRangeAll("startline", "endline")
   if GetScriptParams(LScript, 'RemoveLineRangeAll', 2, LParams) then
     begin
